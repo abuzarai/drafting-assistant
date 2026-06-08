@@ -6,15 +6,15 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Gemini](https://img.shields.io/badge/Gemini-2.0_Flash-4285F4?logo=google&logoColor=white)](https://deepmind.google/technologies/gemini/flash/)
+[![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?logo=google&logoColor=white)](https://deepmind.google/technologies/gemini/flash/)
 
 ---
 
 ## 📖 What Is This?
 
-This microservice generates complete legal documents (plaints, affidavits, written statements, appeals, contracts, and more) from case data using Gemini 2.0 Flash via Vertex AI. Advocates can generate, regenerate specific sections with custom instructions, and export drafts as DOCX files.
+This microservice generates complete legal documents for Pakistani courts — plaints, written statements, affidavits, appeals, contracts, notices, petitions, and injunctions — from case data using Gemini 2.5 Flash via Vertex AI.
 
-It is called by the Express backend in the main Insafdaar webapp and enriches Gemini prompts with case context, intake analysis, verified documents, and optional RAG-based legal references.
+It powers the **AI Document Drafting** feature inside the main Insafdaar webapp. Advocates can generate full drafts, regenerate specific sections with custom instructions, and export the final result as a formatted DOCX file — all without leaving the case dashboard.
 
 ---
 
@@ -24,51 +24,267 @@ It is called by the Express backend in the main Insafdaar webapp and enriches Ge
 Express Backend (via internal API)
      │
      ▼
-Drafting Service
-     │
-     ├── Gemini 2.0 Flash (document generation)
-     ├── PostgreSQL (local mode) or Express API (production)
-     └── Legal RAG Assistant (optional legal references)
-     │
-     ▼
-DOCX Export
+┌──────────────────────────────────────────────────────────┐
+│                  DRAFTING SERVICE (:8001)                 │
+│                                                          │
+│  ┌──────────── ENV=local ───────────────────────────┐    │
+│  │  Direct asyncpg to PostgreSQL for case data      │    │
+│  └──────────────────────────────────────────────────┘    │
+│  ┌──────── ENV=production ───────────────────────────┐   │
+│  │  HTTP proxy to Express /internal/draft/* endpoints │   │
+│  │  with X-Internal-Key auth                         │   │
+│  └──────────────────────────────────────────────────┘   │
+│                                                          │
+│  ┌───────────────── GENERATION PIPELINE ───────────────┐ │
+│  │                                                    │ │
+│  │  1. Case Context (SQL join or Express proxy)       │ │
+│  │     - client_cases, users, client_profiles,        │ │
+│  │       advocate_profiles tables                     │ │
+│  │                                                    │ │
+│  │  2. Intake Analysis (case_intake_sessions)         │ │
+│  │     - JSONB analysis: parties, locations,          │ │
+│  │       dates, amounts, issue summary                │ │
+│  │     - Full transcript from voice interview         │ │
+│  │                                                    │ │
+│  │  3. Case & Client Documents                        │ │
+│  │     - Filtered by document type relevance          │ │
+│  │     - Truncated by token budget per doc type       │ │
+│  │                                                    │ │
+│  │  4. Prefilled Fields from analysis entities        │ │
+│  │                                                    │ │
+│  │  5. Balanced Case Context (type-specific fields)   │ │
+│  │                                                    │ │
+│  │  6. RAG Legal References (Phase 2 — stub)          │ │
+│  │                                                    │ │
+│  │  7. Gemini 2.5 Flash (temperature=0.2)             │ │
+│  │     - Document-type-specific prompt instructions   │ │
+│  │     - JSON output with sections + headings + body  │ │
+│  │     - Multi-layer repair on malformed JSON         │ │
+│  │                                                    │ │
+│  │  8. DOCX Export (python-docx)                      │ │
+│  │     - A4, Times New Roman 12pt, justified          │ │
+│  └────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────┘
 ```
 
-### Two Deployment Modes
+---
 
-| Mode | DB Access | Use Case |
-|------|-----------|----------|
-| `ENV=local` | Direct asyncpg to PostgreSQL | Local development |
-| `ENV=production` | Calls Express `/internal/draft/*` endpoints | Cloud Run (no cross-cloud DB) |
+## 🔌 API Reference
+
+All endpoints are under the `/draft` prefix.
+
+### `POST /draft/init`
+
+Initialise a drafting session — detect document type, prefilled fields, and missing documents.
+
+**Request:**
+```json
+{
+  "case_id": 44,
+  "advocate_id": 12
+}
+```
+
+**Response:**
+```json
+{
+  "case_id": 44,
+  "current_stage": "case_active",
+  "document_type": "Plaint",
+  "client_name": "Abuzar Khan",
+  "language": "English",
+  "prefilled_fields": {
+    "plaintiff": "Abuzar Khan",
+    "defendant": "To be specified",
+    "advocate": "Ali Ahmed",
+    "advocate_email": "ali@example.com",
+    "advocate_phone": "+92-300-1234567",
+    "advocate_bar_council_id": "KHC-1234",
+    "jurisdiction": "Civil Judge, Lahore",
+    "nature_of_dispute": "Property boundary dispute",
+    "relief_sought": "Declaration and permanent injunction",
+    "key_facts": "Locations: Lahore | Dates: 2022"
+  },
+  "missing_documents": ["CNIC_FRONT", "FIR_COPY"]
+}
+```
+
+### `POST /draft/generate`
+
+Generate a full legal document draft using Gemini.
+
+**Request:**
+```json
+{
+  "case_id": 44,
+  "advocate_id": 12,
+  "document_type": "Plaint",
+  "advocate_notes": "Emphasize the property boundary dispute.",
+  "language": "English"
+}
+```
+
+**Response:**
+```json
+{
+  "document_type": "Plaint",
+  "draft": {
+    "title": "IN THE COURT OF CIVIL JUDGE, LAHORE",
+    "sections": [
+      { "id": "sec_1", "heading": "Parties to the Suit", "content": "..." },
+      { "id": "sec_2", "heading": "Facts of the Case", "content": "..." },
+      { "id": "sec_3", "heading": "Cause of Action", "content": "..." },
+      { "id": "sec_4", "heading": "Relief Sought", "content": "..." },
+      { "id": "sec_5", "heading": "Verification", "content": "..." }
+    ]
+  },
+  "legal_references_used": [],
+  "generation_id": "gen_abc123def456"
+}
+```
+
+### `POST /draft/regenerate-section`
+
+Regenerate a single section with specific instructions (e.g., "make this more concise", "focus on X").
+
+**Request:**
+```json
+{
+  "case_id": 44,
+  "advocate_id": 12,
+  "generation_id": "gen_abc123def456",
+  "section_id": "sec_2",
+  "instruction": "Make this more concise, focus on 2022 events only.",
+  "document_type": "Plaint",
+  "language": "English",
+  "current_draft": {
+    "title": "...",
+    "sections": [
+      { "id": "sec_1", "heading": "...", "content": "..." },
+      { "id": "sec_2", "heading": "Facts of the Case", "content": "..." }
+    ]
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "section_id": "sec_2",
+  "heading": "Facts of the Case",
+  "content": "... revised content ..."
+}
+```
+
+### `POST /draft/save`
+
+Persist the current draft to the database.
+
+**Request:**
+```json
+{
+  "case_id": 44,
+  "document_type": "Plaint",
+  "generation_id": "gen_abc123def456",
+  "advocate_id": 12,
+  "draft": { "title": "...", "sections": [...] }
+}
+```
+
+**Response:** `{ "generation_id": "gen_abc123def456", "saved": true }`
+
+### `POST /draft/export`
+
+Export the final draft as a formatted DOCX file.
+
+**Request:**
+```json
+{
+  "case_id": 44,
+  "document_type": "Plaint",
+  "final_draft": { "title": "...", "sections": [...] },
+  "format": "docx"
+}
+```
+
+**Response:** Binary DOCX file stream (`Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document`)
+
+### `GET /health`
+
+**Response:** `{"status": "ok", "env": "local", "service": "drafting-assistant"}`
 
 ---
 
-## 📄 Supported Document Types
+## 📄 Document Types
 
-| Stage | Document Type |
-|-------|---------------|
-| Pre-acceptance | Client-Lawyer Contract |
-| Case Active / Filing | Plaint |
-| Response Stage | Written Statement |
-| Maintainability | Objection Response |
-| Evidence Stage | Affidavit |
-| Appeal | Appeal Application |
-| *(unmapped)* | Notice, Misc. Petition, Stay/Injunction |
+The service generates 9 document types, each with stage-triggered defaults and required sections:
+
+| Document Type | Trigger Stage | Required Sections |
+|---------------|---------------|-------------------|
+| **Plaint** | `case_active`, `filing` | Parties, Jurisdiction, Facts, Cause of Action, Relief Sought, Verification |
+| **Written Statement** | `response_stage` | Preliminary Objections, Para-wise Reply, Affirmative Defenses, Prayer |
+| **Objection Response** | `maintainability` | (same as Written Statement) |
+| **Affidavit** | `evidence_stage` | Deponent Details, Statement of Facts, Verification, Attestation |
+| **Appeal** | `appeal` | Parties, Impugned Order, Grounds of Appeal, Prayer |
+| **Client-Lawyer Contract** | `pre_acceptance` | Parties, Recitals, Scope, Fee Structure, Payment, Obligations, Confidentiality, Conflict, Term, Liability, Dispute Resolution, Governing Law, Signature Blocks |
+| **Notice** | *(manual)* | Addressee, Subject, Authority, Facts, Breach, Demand, Consequences, Signature |
+| **Misc. Petition** | *(manual)* | Cause Title, Background Facts, Grounds, Interim Relief, Prayer, Verification |
+| **Stay/Injunction** | *(manual)* | Cause Title, Facts, Grounds for Interim Relief, Urgency & Irreparable Loss, Balance of Convenience, Prayer |
+
+### Document Context Limits
+
+Each document type has configurable limits to stay within token budgets:
+
+| Document Type | Max Docs | Max Chars/Doc | Max Total Chars |
+|---------------|----------|---------------|-----------------|
+| Client-Lawyer Contract | 5 | 1,100 | 4,500 |
+| Affidavit | 5 | 1,200 | 4,800 |
+| Notice | 5 | 1,200 | 4,800 |
+| Misc. Petition | 6 | 1,300 | 5,600 |
+| Stay/Injunction | 6 | 1,400 | 6,000 |
+| All others | 6 | 1,400 | 6,200 |
 
 ---
 
-## 🔌 API Endpoints
+## ⚙️ Generation Pipeline (Detailed)
 
-All under `/draft`:
+When `/draft/generate` is called, the service assembles a rich context for Gemini:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/draft/init` | Prefill fields, detect missing docs, identify document type |
-| POST | `/draft/generate` | Full Gemini-powered draft generation |
-| POST | `/draft/regenerate-section` | Rewrite one section with advocate instructions |
-| POST | `/draft/save` | Persist current draft |
-| POST | `/draft/export` | Generate and download DOCX |
-| GET | `/health` | Health check |
+1. **Case Context** — Joined data from `client_cases`, `users`, `client_profiles`, `advocate_profiles`. Includes case title, stage, legal domain, parties, verification status.
+
+2. **Intake Analysis** — The latest voice interview's structured analysis (JSONB) and transcript. Extracted by `build_prefilled_fields()`: plaintiff/defendant names, advocate details, jurisdiction, nature of dispute, relief sought, key facts (dates, locations, amounts).
+
+3. **Verified Documents** — `case_documents` and `client_documents` with `status = 'approved'` and non-empty `extracted_text`. Filtered by relevance to target document type, capped by per-type token budgets.
+
+4. **Balanced Case Context** — A compact, type-specific summary. Contracts include payment terms and contact details; other documents include nature of dispute and key facts.
+
+5. **Legal References** — Optional RAG assistant citations (Phase 2 — currently stubbed).
+
+6. **Prompt Construction** — The base prompt (`prompts/base.py`) combines:
+   - System role ("legal drafting assistant for Pakistani civil courts")
+   - Document-specific instructions from `prompts/{type}.py`
+   - All context layers above
+   - Advocate's custom notes
+   - Strict JSON output specification
+   - Writing rules (use only relevant context, no invented facts, "To be specified" for gaps)
+
+7. **Gemini Invocation** — `temperature=0.2` for consistent output. If JSON parsing fails, a second repair call with `temperature=0.0` attempts to fix it. If that also fails, a fallback payload is returned.
+
+8. **DOCX Export** — `python-docx` generates A4, Times New Roman 12pt, justified alignment, with title as Heading 1 and sections as Heading 2.
+
+---
+
+## 🛠️ Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| **Framework** | FastAPI + Uvicorn |
+| **AI Model** | Gemini 2.5 Flash via Vertex AI (`temperature=0.2`) |
+| **Database** | asyncpg (PostgreSQL connection pool) |
+| **Export** | python-docx (A4, Times New Roman 12pt) |
+| **Config** | pydantic-settings + python-dotenv |
+| **Deployment** | Google Cloud Run (GitHub-connected auto-deploy) |
+| **Language** | Python 3.11 |
 
 ---
 
@@ -97,6 +313,25 @@ cp .env.example .env
 # Edit .env with your values
 ```
 
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ENV` | Yes | `local` | Runtime mode: `local` or `production` |
+| `GCP_PROJECT_ID` | Yes | — | GCP project for Vertex AI Gemini |
+| `GOOGLE_VERTEX_LOCATION` | No | `us-central1` | Vertex AI region |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Yes | — | Path to GCP service account key |
+| `DB_HOST` | Local only | `localhost` | PostgreSQL host |
+| `DB_PORT` | Local only | `5432` | PostgreSQL port |
+| `DB_DATABASE` | Local only | `insafdaar_db` | PostgreSQL database |
+| `DB_USER` | Local only | `postgres` | PostgreSQL user |
+| `DB_PASSWORD` | Local only | — | PostgreSQL password |
+| `EXPRESS_INTERNAL_URL` | Prod only | — | Express backend internal URL |
+| `INTERNAL_API_KEY` | Prod only | — | Shared secret for internal auth |
+| `RAG_API_URL` | No | — | Legal RAG Assistant URL (Phase 2) |
+| `PORT` | No | `8001` | Service port |
+| `CORS_ORIGINS` | No | `http://localhost:3000` | Comma-separated CORS origins |
+
 ### Run
 
 ```bash
@@ -105,6 +340,12 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 
 Health check: `curl http://localhost:8001/health`
 
+### Test
+
+```bash
+pytest tests/test_draft_api.py -v
+```
+
 ---
 
 ## 🐳 Docker
@@ -112,6 +353,51 @@ Health check: `curl http://localhost:8001/health`
 ```bash
 docker build -t drafting-assistant .
 docker run --rm -p 8080:8080 --env-file .env drafting-assistant
+```
+
+---
+
+## ☁️ Deployment
+
+- **Platform**: Google Cloud Run (GitHub-connected auto build/deploy)
+- **Mode**: `ENV=production` (proxies DB queries to Express backend; no direct PostgreSQL connection)
+- **Internal API**: Express exposes `/internal/draft/*` endpoints with shared secret auth
+- **Auto-deploy**: Pushes to `main` trigger a Cloud Run rebuild and deploy
+
+---
+
+## 📂 Repository Structure
+
+```
+drafting-assistant/
+├── main.py                    # FastAPI entrypoint, CORS, health
+├── config.py                  # Pydantic settings (all env vars)
+├── db/
+│   └── connection.py          # asyncpg pool setup + draft_sessions table
+├── models/
+│   └── schemas.py             # Pydantic request/response models
+├── routes/
+│   └── draft.py               # 5 endpoints: init, generate, regenerate, save, export
+├── services/
+│   ├── gemini_service.py      # Gemini invocation, JSON parsing, repair fallback
+│   ├── context_service.py     # Case context, intake analysis, document assembly
+│   ├── draft_store.py         # Draft persistence (extended schema)
+│   ├── export_service.py      # DOCX generation (python-docx)
+│   └── rag_service.py         # RAG client (Phase 2 stub)
+├── prompts/
+│   ├── base.py                # System prompt builder + JSON output spec
+│   ├── plaint.py              # Plaint document instructions
+│   ├── written_statement.py   # Written Statement & Objection Response
+│   ├── affidavit.py           # Affidavit instructions
+│   ├── appeal.py              # Appeal instructions
+│   ├── contract.py            # Client-Lawyer Contract (15 sections)
+│   ├── notice.py              # Legal Notice instructions
+│   ├── misc_petition.py       # Misc. Petition instructions
+│   └── stay_injunction.py     # Stay/Injunction instructions
+├── tests/
+│   └── test_draft_api.py      # FastAPI TestClient test suite
+├── Dockerfile                 # Cloud Run build
+└── requirements.txt           # Python dependencies
 ```
 
 ---
