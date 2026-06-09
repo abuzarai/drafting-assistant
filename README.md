@@ -69,7 +69,8 @@ Express Backend (via internal API)
 
 ---
 
-## 🔌 API Reference
+<details>
+<summary>API Reference</summary>
 
 All endpoints are under the `/draft` prefix.
 
@@ -212,6 +213,8 @@ Export the final draft as a formatted DOCX file.
 ### `GET /health`
 
 **Response:** `{"status": "ok", "env": "local", "service": "drafting-assistant"}`
+
+</details>
 
 ---
 
