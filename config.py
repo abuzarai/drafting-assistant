@@ -21,7 +21,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     env: str = "local"
 
-    # Gemini via Vertex AI
+    # Gemini: API key (Gemini API / AI Studio) takes precedence when set.
+    # Falls back to Vertex AI via ADC when only gcp_project_id is provided.
+    gemini_api_key: str = Field(default="")
+    gemini_model: str = Field(default="gemini-2.5-flash")
+
+    # Vertex AI fallback auth
     gcp_project_id: str = Field(default="")
     google_vertex_location: str = Field(default="us-central1")
 

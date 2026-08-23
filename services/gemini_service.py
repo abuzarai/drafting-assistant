@@ -166,16 +166,26 @@ def _fallback_section_payload(
 def get_model():
     global _model
     if _model is None:
-        if not settings.gcp_project_id:
-            raise RuntimeError("Missing GCP_PROJECT_ID for Vertex AI Gemini")
-        _model = {
-            "client": genai.Client(
-                vertexai=True,
-                project=settings.gcp_project_id,
-                location=settings.google_vertex_location,
-            ),
-            "model": "gemini-2.5-flash",
-        }
+        if settings.gemini_api_key:
+            # Gemini API (AI Studio key) — no GCP project or billing needed
+            _model = {
+                "client": genai.Client(api_key=settings.gemini_api_key),
+                "model": settings.gemini_model,
+            }
+        elif settings.gcp_project_id:
+            # Vertex AI via ADC (legacy path, kept for compatibility)
+            _model = {
+                "client": genai.Client(
+                    vertexai=True,
+                    project=settings.gcp_project_id,
+                    location=settings.google_vertex_location,
+                ),
+                "model": settings.gemini_model,
+            }
+        else:
+            raise RuntimeError(
+                "Missing Gemini credentials: set GEMINI_API_KEY (or GCP_PROJECT_ID for Vertex AI)"
+            )
     return _model
 
 
