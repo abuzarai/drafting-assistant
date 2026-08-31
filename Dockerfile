@@ -10,7 +10,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy only API/runtime code needed in production image
-COPY main.py config.py ./
+COPY main.py auth.py config.py ./
 COPY db ./db
 COPY models ./models
 COPY prompts ./prompts

@@ -1,8 +1,16 @@
 from io import BytesIO
 
+import os
+
+os.environ.setdefault("ENV", "production")
+os.environ.setdefault("INTERNAL_API_KEY", "test-internal-key")
+
 from fastapi.testclient import TestClient
 
 import main as draft_main
+
+
+AUTH = {"x-internal-key": os.environ["INTERNAL_API_KEY"]}
 
 
 def _mock_prefilled_fields():
@@ -78,7 +86,7 @@ def test_draft_init_success(monkeypatch):
         lambda *_args, **_kwargs: ["Title deed"],
     )
 
-    response = client.post("/draft/init", json={"case_id": 101, "advocate_id": 77})
+    response = client.post("/draft/init", json={"case_id": 101, "advocate_id": 77}, headers=AUTH)
 
     assert response.status_code == 200
     body = response.json()
@@ -159,6 +167,7 @@ def test_draft_generate_success(monkeypatch):
             "advocate_notes": "Urgent matter",
             "language": "English",
         },
+        headers=AUTH,
     )
 
     assert response.status_code == 200
@@ -181,6 +190,7 @@ def test_draft_export_rejects_non_docx():
                 "sections": [{"id": "s1", "heading": "Facts", "content": "Sample"}],
             },
         },
+        headers=AUTH,
     )
 
     assert response.status_code == 422
@@ -205,6 +215,7 @@ def test_draft_export_docx_success(monkeypatch):
                 "sections": [{"id": "s1", "heading": "Facts", "content": "Sample"}],
             },
         },
+        headers=AUTH,
     )
 
     assert response.status_code == 200

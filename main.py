@@ -2,9 +2,10 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from auth import require_internal_key
 from config import settings
 from db.connection import close_pool, init_pool
 from routes.draft import router as draft_router
@@ -17,7 +18,12 @@ async def lifespan(app: FastAPI):
     await close_pool()
 
 
-app = FastAPI(title="Insafdaar Drafting Service", lifespan=lifespan)
+app = FastAPI(
+    title="Insafdaar Drafting Service",
+    lifespan=lifespan,
+    docs_url=None if settings.env == "production" else "/docs",
+    redoc_url=None if settings.env == "production" else "/redoc",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(draft_router)
+app.include_router(draft_router, dependencies=[Depends(require_internal_key)])
 
 
 @app.get("/health")
