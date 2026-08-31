@@ -11,6 +11,7 @@ from google import genai
 from config import settings
 from models.schemas import DraftContent, DraftSection
 from prompts.base import build_generation_prompt, build_regeneration_prompt
+from services.retry import gemini_call_with_retry
 from prompts import (
     plaint,
     contract,
@@ -234,11 +235,14 @@ async def generate_draft(
         document_instructions=DOCUMENT_INSTRUCTIONS.get(document_type, ""),
     )
 
-    response = await asyncio.to_thread(
-        client.models.generate_content,
-        model=model_name,
-        contents=prompt,
-        config=genai.types.GenerateContentConfig(temperature=0.2),
+    response = await gemini_call_with_retry(
+        lambda: asyncio.to_thread(
+            client.models.generate_content,
+            model=model_name,
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(temperature=0.2),
+        ),
+        timeout=240,
     )
     raw_text = response.text or ""
     try:
@@ -287,11 +291,14 @@ async def regenerate_section(
         nature_of_dispute=str(prefilled.get("nature_of_dispute") or "To be specified"),
     )
 
-    response = await asyncio.to_thread(
-        client.models.generate_content,
-        model=model_name,
-        contents=prompt,
-        config=genai.types.GenerateContentConfig(temperature=0.2),
+    response = await gemini_call_with_retry(
+        lambda: asyncio.to_thread(
+            client.models.generate_content,
+            model=model_name,
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(temperature=0.2),
+        ),
+        timeout=240,
     )
     raw_text = response.text or ""
     try:
