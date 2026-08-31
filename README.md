@@ -384,7 +384,6 @@ drafting-assistant/
 ├── services/
 │   ├── gemini_service.py      # Gemini invocation, JSON parsing, repair fallback
 │   ├── context_service.py     # Case context, intake analysis, document assembly
-│   ├── draft_store.py         # Draft persistence (extended schema)
 │   ├── export_service.py      # DOCX generation (python-docx)
 │   └── rag_service.py         # RAG client (Phase 2 stub)
 ├── prompts/
