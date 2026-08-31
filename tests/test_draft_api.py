@@ -170,11 +170,32 @@ def test_draft_generate_success(monkeypatch):
         headers=AUTH,
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["generation_id"] == "gen-123"
-    assert body["document_type"] == "Legal Notice"
-    assert body["draft"]["title"] == "Draft Legal Notice"
+    # Generation is queued as a background job; poll for the result.
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    assert response.json()["status"] == "queued"
+
+    import time
+
+    body = None
+    for _ in range(50):
+        status_resp = client.get(f"/draft/generate/{job_id}", headers=AUTH)
+        assert status_resp.status_code == 200
+        body = status_resp.json()
+        if body["status"] in ("succeeded", "failed"):
+            break
+        time.sleep(0.05)
+
+    assert body["status"] == "succeeded"
+    result = body["result"]
+    assert result["generation_id"] == "gen-123"
+    assert result["document_type"] == "Legal Notice"
+    assert result["draft"]["title"] == "Draft Legal Notice"
+
+
+def test_draft_generate_status_404():
+    client = _build_client()
+    assert client.get("/draft/generate/does-not-exist", headers=AUTH).status_code == 404
 
 
 def test_draft_export_rejects_non_docx():

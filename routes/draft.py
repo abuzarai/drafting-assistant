@@ -18,6 +18,7 @@ from models.schemas import (
     RegenerateSectionResponse,
 )
 from services import context_service, export_service, gemini_service, rag_service
+from services.draft_jobs import jobs
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +68,8 @@ async def draft_init(req: DraftInitRequest):
     )
 
 
-@router.post("/generate", response_model=DraftGenerateResponse)
-async def draft_generate(req: DraftGenerateRequest):
+async def _execute_generate(req: DraftGenerateRequest) -> DraftGenerateResponse:
+    """The expensive part of generation, run as a background job."""
     pool = get_pool()
     try:
         case_context = await context_service.get_case_context(
@@ -128,6 +129,27 @@ async def draft_generate(req: DraftGenerateRequest):
         legal_references_used=[],
         generation_id=generation_id,
     )
+
+
+@router.post("/generate", status_code=202)
+async def draft_generate(req: DraftGenerateRequest):
+    """Queue generation as a background job; poll GET /draft/generate/{id}."""
+    job_id = jobs.create(lambda: _execute_generate(req))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@router.get("/generate/{job_id}")
+async def draft_generate_status(job_id: str):
+    """Job status for a queued generation."""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    payload = {"job_id": job_id, "status": job["status"]}
+    if job["status"] == "succeeded":
+        payload["result"] = job["result"]
+    elif job["status"] == "failed":
+        payload["error"] = job["error"]
+    return payload
 
 
 @router.post("/regenerate-section", response_model=RegenerateSectionResponse)
