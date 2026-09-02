@@ -1,6 +1,6 @@
 # AI Document Drafting Service
 
-> **Final Year Project — AI Microservice** · Part of the [Insafdaar](https://github.com/abuzarai/insafdaar-webapp) legal case management platform.  
+> Final Year Project, AI microservice · Part of the [Insafdaar](https://github.com/abuzarai/insafdaar-webapp) legal case management platform.  
 > FastAPI microservice that generates, iterates, and exports legal documents for Pakistani courts using Gemini AI.
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -10,22 +10,22 @@
 
 ---
 
-## 📖 What Is This?
+## What Is This?
 
-This microservice generates complete legal documents for Pakistani courts — plaints, written statements, affidavits, appeals, contracts, notices, petitions, and injunctions — from case data using Gemini 2.5 Flash via Vertex AI.
+This microservice generates plaints, written statements, affidavits, appeals, contracts, notices, petitions, and injunctions for Pakistani courts, using case data and the Gemini API (gemini-2.5-flash).
 
-It powers the **AI Document Drafting** feature inside the main Insafdaar webapp. Advocates can generate full drafts, regenerate specific sections with custom instructions, and export the final result as a formatted DOCX file — all without leaving the case dashboard.
+It powers the **AI Document Drafting** feature inside the main Insafdaar webapp. Advocates can generate full drafts, regenerate specific sections with custom instructions, and export the result as a DOCX file from the case dashboard.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 Express Backend (via internal API)
      │
      ▼
 ┌──────────────────────────────────────────────────────────┐
-│                  DRAFTING SERVICE (:8001)                 │
+│                  DRAFTING SERVICE (:8080)                 │
 │                                                          │
 │  ┌──────────── ENV=local ───────────────────────────┐    │
 │  │  Direct asyncpg to PostgreSQL for case data      │    │
@@ -54,7 +54,7 @@ Express Backend (via internal API)
 │  │                                                    │ │
 │  │  5. Balanced Case Context (type-specific fields)   │ │
 │  │                                                    │ │
-│  │  6. RAG Legal References (Phase 2 — stub)          │ │
+│  │  6. RAG Legal References (Phase 2, stub)          │ │
 │  │                                                    │ │
 │  │  7. Gemini 2.5 Flash (temperature=0.2)             │ │
 │  │     - Document-type-specific prompt instructions   │ │
@@ -76,7 +76,7 @@ All endpoints are under the `/draft` prefix.
 
 ### `POST /draft/init`
 
-Initialise a drafting session — detect document type, prefilled fields, and missing documents.
+Initialise a drafting session: detect document type, prefilled fields, and missing documents.
 
 **Request:**
 ```json
@@ -218,7 +218,7 @@ Export the final draft as a formatted DOCX file.
 
 ---
 
-## 📄 Document Types
+## Document Types
 
 The service generates 9 document types, each with stage-triggered defaults and required sections:
 
@@ -249,21 +249,21 @@ Each document type has configurable limits to stay within token budgets:
 
 ---
 
-## ⚙️ Generation Pipeline (Detailed)
+## Generation Pipeline (Detailed)
 
 When `/draft/generate` is called, the service assembles a rich context for Gemini:
 
-1. **Case Context** — Joined data from `client_cases`, `users`, `client_profiles`, `advocate_profiles`. Includes case title, stage, legal domain, parties, verification status.
+1. **Case Context**: Joined data from `client_cases`, `users`, `client_profiles`, `advocate_profiles`. Includes case title, stage, legal domain, parties, verification status.
 
-2. **Intake Analysis** — The latest voice interview's structured analysis (JSONB) and transcript. Extracted by `build_prefilled_fields()`: plaintiff/defendant names, advocate details, jurisdiction, nature of dispute, relief sought, key facts (dates, locations, amounts).
+2. **Intake Analysis**: The latest voice interview's structured analysis (JSONB) and transcript. Extracted by `build_prefilled_fields()`: plaintiff/defendant names, advocate details, jurisdiction, nature of dispute, relief sought, key facts (dates, locations, amounts).
 
-3. **Verified Documents** — `case_documents` and `client_documents` with `status = 'approved'` and non-empty `extracted_text`. Filtered by relevance to target document type, capped by per-type token budgets.
+3. **Verified Documents**: `case_documents` and `client_documents` with `status = 'approved'` and non-empty `extracted_text`. Filtered by relevance to target document type, capped by per-type token budgets.
 
-4. **Balanced Case Context** — A compact, type-specific summary. Contracts include payment terms and contact details; other documents include nature of dispute and key facts.
+4. **Balanced Case Context**: A compact, type-specific summary. Contracts include payment terms and contact details; other documents include nature of dispute and key facts.
 
-5. **Legal References** — Optional RAG assistant citations (Phase 2 — currently stubbed).
+5. **Legal References**: Optional RAG assistant citations (Phase 2, currently stubbed).
 
-6. **Prompt Construction** — The base prompt (`prompts/base.py`) combines:
+6. **Prompt Construction**: The base prompt (`prompts/base.py`) combines:
    - System role ("legal drafting assistant for Pakistani civil courts")
    - Document-specific instructions from `prompts/{type}.py`
    - All context layers above
@@ -271,33 +271,33 @@ When `/draft/generate` is called, the service assembles a rich context for Gemin
    - Strict JSON output specification
    - Writing rules (use only relevant context, no invented facts, "To be specified" for gaps)
 
-7. **Gemini Invocation** — `temperature=0.2` for consistent output. If JSON parsing fails, a second repair call with `temperature=0.0` attempts to fix it. If that also fails, a fallback payload is returned.
+7. **Gemini Invocation**: `temperature=0.2` for consistent output. If JSON parsing fails, a second repair call with `temperature=0.0` attempts to fix it. If that also fails, a fallback payload is returned.
 
-8. **DOCX Export** — `python-docx` generates A4, Times New Roman 12pt, justified alignment, with title as Heading 1 and sections as Heading 2.
+8. **DOCX Export**: `python-docx` generates A4, Times New Roman 12pt, justified alignment, with title as Heading 1 and sections as Heading 2.
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Component | Technology |
 |-----------|-----------|
 | **Framework** | FastAPI + Uvicorn |
-| **AI Model** | Gemini 2.5 Flash via Vertex AI (`temperature=0.2`) |
-| **Database** | asyncpg (PostgreSQL connection pool) |
+| **AI Model** | Gemini 2.5 Flash via the Gemini API (`temperature=0.2`) |
+| **Database** | asyncpg (PostgreSQL connection pool, local mode) |
 | **Export** | python-docx (A4, Times New Roman 12pt) |
 | **Config** | pydantic-settings + python-dotenv |
-| **Deployment** | Google Cloud Run (GitHub-connected auto-deploy) |
+| **Deployment** | Container in the Insafdaar compose stack (Oracle Cloud Infrastructure) |
 | **Language** | Python 3.11 |
 
 ---
 
-## 🚀 Local Development
+## Local Development
 
 ### Prerequisites
 
 - Python 3.11+
 - PostgreSQL (local mode only)
-- Vertex AI access in your GCP project
+- Gemini API key ([AI Studio](https://aistudio.google.com/apikey))
 
 ### Setup
 
@@ -306,10 +306,8 @@ When `/draft/generate` is called, the service assembles a rich context for Gemin
 git clone https://github.com/abuzarai/drafting-assistant.git
 cd drafting-assistant
 
-# Virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+# Install dependencies from the locked graph (pyproject.toml + uv.lock)
+uv sync
 
 # Environment
 cp .env.example .env
@@ -321,37 +319,36 @@ cp .env.example .env
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ENV` | Yes | `local` | Runtime mode: `local` or `production` |
-| `GCP_PROJECT_ID` | Yes | — | GCP project for Vertex AI Gemini |
-| `GOOGLE_VERTEX_LOCATION` | No | `us-central1` | Vertex AI region |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Yes | — | Path to GCP service account key |
+| `GEMINI_API_KEY` | Yes | None | Gemini API key (takes precedence over legacy Vertex settings) |
+| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Gemini model name |
 | `DB_HOST` | Local only | `localhost` | PostgreSQL host |
 | `DB_PORT` | Local only | `5432` | PostgreSQL port |
 | `DB_DATABASE` | Local only | `insafdaar_db` | PostgreSQL database |
 | `DB_USER` | Local only | `postgres` | PostgreSQL user |
-| `DB_PASSWORD` | Local only | — | PostgreSQL password |
-| `EXPRESS_INTERNAL_URL` | Prod only | — | Express backend internal URL |
-| `INTERNAL_API_KEY` | Prod only | — | Shared secret for internal auth |
-| `RAG_API_URL` | No | — | Legal RAG Assistant URL (Phase 2) |
-| `PORT` | No | `8001` | Service port |
+| `DB_PASSWORD` | Local only | None | PostgreSQL password |
+| `EXPRESS_INTERNAL_URL` | Prod only | None | Express backend internal URL |
+| `INTERNAL_API_KEY` | Prod only | None | Shared secret for internal auth |
+| `RAG_API_URL` | No | None | Legal RAG Assistant URL (Phase 2) |
+| `PORT` | No | `8080` | Service port |
 | `CORS_ORIGINS` | No | `http://localhost:3000` | Comma-separated CORS origins |
 
 ### Run
 
 ```bash
-python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+uv run uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-Health check: `curl http://localhost:8001/health`
+Health check: `curl http://localhost:8080/health`
 
 ### Test
 
 ```bash
-pytest tests/test_draft_api.py -v
+uv run pytest tests/test_draft_api.py -v
 ```
 
 ---
 
-## 🐳 Docker
+## Docker
 
 ```bash
 docker build -t drafting-assistant .
@@ -360,27 +357,27 @@ docker run --rm -p 8080:8080 --env-file .env drafting-assistant
 
 ---
 
-## ☁️ Deployment
+## Deployment
 
-- **Platform**: Google Cloud Run (GitHub-connected auto build/deploy)
-- **Mode**: `ENV=production` (proxies DB queries to Express backend; no direct PostgreSQL connection)
-- **Internal API**: Express exposes `/internal/draft/*` endpoints with shared secret auth
-- **Auto-deploy**: Pushes to `main` trigger a Cloud Run rebuild and deploy
+- **Platform**: container in the Insafdaar compose stack (Oracle Cloud Infrastructure)
+- **Mode**: `ENV=production` (proxies DB queries to the Express backend via `/internal/draft/*`; no direct PostgreSQL connection)
+- **Auth**: the Express backend's `/internal/draft/*` endpoints require the shared `X-Internal-Key`
+- **Deploys**: handled by the main webapp's pipeline (GitHub Actions builds the image on a runner, ships it, and applies the stack)
 
 ---
 
-## 📂 Repository Structure
+## Repository Structure
 
 ```
 drafting-assistant/
 ├── main.py                    # FastAPI entrypoint, CORS, health
 ├── config.py                  # Pydantic settings (all env vars)
 ├── db/
-│   └── connection.py          # asyncpg pool setup + draft_sessions table
+│   └── connection.py          # asyncpg pool setup
 ├── models/
 │   └── schemas.py             # Pydantic request/response models
 ├── routes/
-│   └── draft.py               # 5 endpoints: init, generate, regenerate, save, export
+│   └── draft.py               # init, generate, regenerate, save, export
 ├── services/
 │   ├── gemini_service.py      # Gemini invocation, JSON parsing, repair fallback
 │   ├── context_service.py     # Case context, intake analysis, document assembly
@@ -398,12 +395,13 @@ drafting-assistant/
 │   └── stay_injunction.py     # Stay/Injunction instructions
 ├── tests/
 │   └── test_draft_api.py      # FastAPI TestClient test suite
-├── Dockerfile                 # Cloud Run build
-└── requirements.txt           # Python dependencies
+├── Dockerfile                 # Container build
+├── pyproject.toml             # Dependencies & project metadata
+└── uv.lock                    # Locked dependency graph
 ```
 
 ---
 
-## 📝 License
+## License
 
-Licensed under the [Apache License 2.0](LICENSE).  
+Licensed under the [Apache License 2.0](LICENSE).
