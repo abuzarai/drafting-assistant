@@ -7,15 +7,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from auth import require_internal_key
 from config import settings
-from db.connection import close_pool, init_pool
 from routes.draft import router as draft_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_pool()
+    if not settings.express_internal_url or not settings.internal_api_key:
+        raise RuntimeError("Drafting requires EXPRESS_INTERNAL_URL and INTERNAL_API_KEY")
     yield
-    await close_pool()
 
 
 app = FastAPI(

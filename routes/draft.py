@@ -2,10 +2,10 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+import httpx
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from db.connection import get_pool
 from models.schemas import (
     DraftExportRequest,
     DraftGenerateRequest,
@@ -30,19 +30,20 @@ def _http_from_error(error: Exception) -> HTTPException:
         return HTTPException(status_code=403, detail=str(error))
     if isinstance(error, LookupError):
         return HTTPException(status_code=404, detail=str(error))
-    return HTTPException(status_code=500, detail=str(error))
+    if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 409:
+        return HTTPException(status_code=409, detail="Draft ownership conflict")
+    return HTTPException(status_code=500, detail="Drafting request failed")
 
 
 @router.post("/init", response_model=DraftInitResponse)
 async def draft_init(req: DraftInitRequest):
-    pool = get_pool()
     try:
         case_context = await context_service.get_case_context(
-            req.case_id, req.advocate_id, pool
+            req.case_id, req.advocate_id
         )
-        intake = await context_service.get_intake_analysis(req.case_id, pool)
+        intake = await context_service.get_intake_analysis(req.case_id, req.advocate_id)
         documents = await context_service.get_case_documents(
-            req.case_id, case_context.get("user_id"), pool, req.advocate_id
+            req.case_id, req.advocate_id
         )
     except Exception as error:
         raise _http_from_error(error)
@@ -70,10 +71,9 @@ async def draft_init(req: DraftInitRequest):
 
 async def _execute_generate(req: DraftGenerateRequest) -> DraftGenerateResponse:
     """The expensive part of generation, run as a background job."""
-    pool = get_pool()
     try:
         case_context = await context_service.get_case_context(
-            req.case_id, req.advocate_id, pool
+            req.case_id, req.advocate_id
         )
     except PermissionError:
         raise HTTPException(
@@ -85,9 +85,9 @@ async def _execute_generate(req: DraftGenerateRequest) -> DraftGenerateResponse:
         raise HTTPException(status_code=500, detail=str(error))
 
     try:
-        intake = await context_service.get_intake_analysis(req.case_id, pool)
+        intake = await context_service.get_intake_analysis(req.case_id, req.advocate_id)
         documents = await context_service.get_case_documents(
-            req.case_id, case_context.get("user_id"), pool, req.advocate_id
+            req.case_id, req.advocate_id
         )
         prefilled = context_service.build_prefilled_fields(
             intake.get("analysis"), intake.get("transcript"), case_context
@@ -134,16 +134,30 @@ async def _execute_generate(req: DraftGenerateRequest) -> DraftGenerateResponse:
 @router.post("/generate", status_code=202)
 async def draft_generate(req: DraftGenerateRequest):
     """Queue generation as a background job; poll GET /draft/generate/{id}."""
-    job_id = jobs.create(lambda: _execute_generate(req))
+    try:
+        await context_service.get_case_context(req.case_id, req.advocate_id)
+    except Exception as error:
+        raise _http_from_error(error)
+    job_id = jobs.create(
+        lambda: _execute_generate(req),
+        case_id=req.case_id,
+        advocate_id=req.advocate_id,
+    )
     return {"job_id": job_id, "status": "queued"}
 
 
 @router.get("/generate/{job_id}")
-async def draft_generate_status(job_id: str):
-    """Job status for a queued generation."""
-    job = jobs.get(job_id)
+async def draft_generate_status(
+    job_id: str, case_id: int = Query(gt=0), advocate_id: int = Query(gt=0)
+):
+    """Status is private to the original actor/case, with current access checked."""
+    job = jobs.get(job_id, case_id=case_id, advocate_id=advocate_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found or expired")
+    try:
+        await context_service.get_case_context(case_id, advocate_id)
+    except Exception as error:
+        raise _http_from_error(error)
     payload = {"job_id": job_id, "status": job["status"]}
     if job["status"] == "succeeded":
         payload["result"] = job["result"]
@@ -159,14 +173,13 @@ async def regenerate_section(req: RegenerateSectionRequest):
             status_code=404, detail=f"Section {req.section_id} not found"
         )
 
-    pool = get_pool()
     try:
         case_context = await context_service.get_case_context(
-            req.case_id, req.advocate_id, pool
+            req.case_id, req.advocate_id
         )
-        intake = await context_service.get_intake_analysis(req.case_id, pool)
+        intake = await context_service.get_intake_analysis(req.case_id, req.advocate_id)
         documents = await context_service.get_case_documents(
-            req.case_id, case_context.get("user_id"), pool, req.advocate_id
+            req.case_id, req.advocate_id
         )
         prefilled = context_service.build_prefilled_fields(
             intake.get("analysis"), intake.get("transcript"), case_context
@@ -199,9 +212,7 @@ async def regenerate_section(req: RegenerateSectionRequest):
         raise HTTPException(status_code=422, detail=str(error))
     except Exception as error:
         logger.exception("Section regeneration failed")
-        raise HTTPException(
-            status_code=500, detail=f"Section regeneration failed: {error}"
-        )
+        raise _http_from_error(error)
 
     return RegenerateSectionResponse(
         section_id=section.id,
@@ -212,7 +223,6 @@ async def regenerate_section(req: RegenerateSectionRequest):
 
 @router.post("/save", response_model=DraftSaveResponse)
 async def draft_save(req: DraftSaveRequest):
-    pool = get_pool()
     try:
         saved = await context_service.save_draft_session(
             case_id=req.case_id,
@@ -220,10 +230,9 @@ async def draft_save(req: DraftSaveRequest):
             generation_id=req.generation_id,
             draft_json=req.draft.model_dump(),
             advocate_id=req.advocate_id,
-            pool=pool,
         )
     except Exception as error:
-        raise HTTPException(status_code=500, detail=f"Draft save failed: {error}")
+        raise _http_from_error(error)
 
     return DraftSaveResponse(generation_id=req.generation_id, saved=saved)
 

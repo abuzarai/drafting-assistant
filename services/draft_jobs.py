@@ -1,8 +1,9 @@
 """Async job store for slow draft generations.
 
-The service runs single-instance, so an in-memory store is sufficient.
-Jobs are TTL-swept (default 30 min); a job lost to a restart is recoverable —
-the client simply resubmits.
+This remains a single-instance, RAM-only store with actor/case-bound reads.
+Jobs are TTL-swept (default 30 min) and are lost on restart. Missing jobs do not
+prove inference never ran and must not trigger automatic provider regeneration.
+Durable execution and fenced attempts are separate platform work.
 """
 
 import asyncio
@@ -17,12 +18,17 @@ class JobStore:
         self._jobs: dict[str, dict] = {}
         self._lock = threading.Lock()
 
-    def create(self, run_coro, ttl_seconds: int | None = None) -> str:
+    def create(
+        self, run_coro, *, case_id: int, advocate_id: int,
+        ttl_seconds: int | None = None,
+    ) -> str:
         """Queue a coroutine as a background job. Returns the job id."""
         job_id = uuid.uuid4().hex
         with self._lock:
             self._sweep_locked()
             self._jobs[job_id] = {
+                "case_id": case_id,
+                "advocate_id": advocate_id,
                 "status": "queued",
                 "result": None,
                 "error": None,
@@ -48,11 +54,11 @@ class JobStore:
         with self._lock:
             return self._jobs.get(job_id)
 
-    def get(self, job_id: str) -> dict | None:
+    def get(self, job_id: str, *, case_id: int, advocate_id: int) -> dict | None:
         with self._lock:
             self._sweep_locked()
             job = self._jobs.get(job_id)
-            if not job:
+            if not job or (job["case_id"], job["advocate_id"]) != (case_id, advocate_id):
                 return None
             return {
                 "status": job["status"],

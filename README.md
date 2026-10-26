@@ -27,17 +27,14 @@ Express Backend (via internal API)
 ┌──────────────────────────────────────────────────────────┐
 │                  DRAFTING SERVICE (:8080)                 │
 │                                                          │
-│  ┌──────────── ENV=local ───────────────────────────┐    │
-│  │  Direct asyncpg to PostgreSQL for case data      │    │
-│  └──────────────────────────────────────────────────┘    │
-│  ┌──────── ENV=production ───────────────────────────┐   │
+│  ┌──────── All environments ────────────────────────┐   │
 │  │  HTTP proxy to Express /internal/draft/* endpoints │   │
 │  │  with X-Internal-Key auth                         │   │
 │  └──────────────────────────────────────────────────┘   │
 │                                                          │
 │  ┌───────────────── GENERATION PIPELINE ───────────────┐ │
 │  │                                                    │ │
-│  │  1. Case Context (SQL join or Express proxy)       │ │
+│  │  1. Case Context (authorized Express API)         │ │
 │  │     - client_cases, users, client_profiles,        │ │
 │  │       advocate_profiles tables                     │ │
 │  │                                                    │ │
@@ -72,7 +69,7 @@ Express Backend (via internal API)
 <details>
 <summary>API Reference</summary>
 
-All endpoints are under the `/draft` prefix.
+All endpoints are under the `/draft` prefix and require `X-Internal-Key` in local and production environments. Express derives the advocate from the authenticated user. The service's shared credential is not a replacement for future job-bound worker delegation.
 
 ### `POST /draft/init`
 
@@ -125,9 +122,21 @@ Generate a full legal document draft using Gemini.
 }
 ```
 
-**Response:**
+**Response (202):**
+```json
+{ "job_id": "fictional_job_id", "status": "queued" }
+```
+
+### `GET /draft/generate/{job_id}?case_id=44&advocate_id=12`
+
+Poll with the original case and advocate scope. Mismatched scope returns 404; missing scope returns 422. Current case assignment is rechecked before disclosure. Jobs remain RAM-only and are lost on restart; an unavailable job is not permission for automatic provider regeneration.
+
+**Succeeded polling response:**
 ```json
 {
+  "job_id": "fictional_job_id",
+  "status": "succeeded",
+  "result": {
   "document_type": "Plaint",
   "draft": {
     "title": "IN THE COURT OF CIVIL JUDGE, LAHORE",
@@ -141,6 +150,7 @@ Generate a full legal document draft using Gemini.
   },
   "legal_references_used": [],
   "generation_id": "gen_abc123def456"
+  }
 }
 ```
 
@@ -283,7 +293,7 @@ When `/draft/generate` is called, the service assembles a rich context for Gemin
 |-----------|-----------|
 | **Framework** | FastAPI + Uvicorn |
 | **AI Model** | Gemini 2.5 Flash via the Gemini API (`temperature=0.2`) |
-| **Database** | asyncpg (PostgreSQL connection pool, local mode) |
+| **Persistence** | Express internal APIs in every environment; no runtime database pool |
 | **Export** | python-docx (A4, Times New Roman 12pt) |
 | **Config** | pydantic-settings + python-dotenv |
 | **Deployment** | Container in the Insafdaar compose stack (Oracle Cloud Infrastructure) |
@@ -296,8 +306,11 @@ When `/draft/generate` is called, the service assembles a rich context for Gemin
 ### Prerequisites
 
 - Python 3.11+
-- PostgreSQL (local mode only)
-- Gemini API key ([AI Studio](https://aistudio.google.com/apikey))
+- Express backend with its PostgreSQL database and internal drafting routes
+- `EXPRESS_INTERNAL_URL` and matching `INTERNAL_API_KEY` in every environment
+- Separately approved Gemini access for real generation; offline tests need no provider account
+
+Provider operations remain subject to the platform's zero-spend and fictional-data restrictions. Existing provider retries/repair calls require policy review before use; this integration slice does not authorize them.
 
 ### Setup
 
@@ -321,13 +334,8 @@ cp .env.example .env
 | `ENV` | Yes | `local` | Runtime mode: `local` or `production` |
 | `GEMINI_API_KEY` | Yes | None | Gemini API key (takes precedence over legacy Vertex settings) |
 | `GEMINI_MODEL` | No | `gemini-2.5-flash` | Gemini model name |
-| `DB_HOST` | Local only | `localhost` | PostgreSQL host |
-| `DB_PORT` | Local only | `5432` | PostgreSQL port |
-| `DB_DATABASE` | Local only | `insafdaar_db` | PostgreSQL database |
-| `DB_USER` | Local only | `postgres` | PostgreSQL user |
-| `DB_PASSWORD` | Local only | None | PostgreSQL password |
-| `EXPRESS_INTERNAL_URL` | Prod only | None | Express backend internal URL |
-| `INTERNAL_API_KEY` | Prod only | None | Shared secret for internal auth |
+| `EXPRESS_INTERNAL_URL` | Always | None | Express base URL reachable from drafting |
+| `INTERNAL_API_KEY` | Always | None | Shared secret for inbound and Express internal auth |
 | `RAG_API_URL` | No | None | Legal RAG Assistant URL (Phase 2) |
 | `PORT` | No | `8080` | Service port |
 | `CORS_ORIGINS` | No | `http://localhost:3000` | Comma-separated CORS origins |
@@ -343,7 +351,8 @@ Health check: `curl http://localhost:8080/health`
 ### Test
 
 ```bash
-uv run pytest tests/test_draft_api.py -v
+env PYTHONDONTWRITEBYTECODE=1 PYTHON_DOTENV_DISABLED=1 \
+    PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run --no-sync pytest -q -p no:cacheprovider tests
 ```
 
 ---
@@ -360,7 +369,7 @@ docker run --rm -p 8080:8080 --env-file .env drafting-assistant
 ## Deployment
 
 - **Platform**: container in the Insafdaar compose stack (Oracle Cloud Infrastructure)
-- **Mode**: `ENV=production` (proxies DB queries to the Express backend via `/internal/draft/*`; no direct PostgreSQL connection)
+- **Mode**: `ENV=production` controls service presentation; all environments use Express `/internal/draft/*` for case access and saves. Missing Express URL/key fails startup. Deploy this contract together with the matching webapp changes.
 - **Auth**: the Express backend's `/internal/draft/*` endpoints require the shared `X-Internal-Key`
 - **Deploys**: handled by the main webapp's pipeline (GitHub Actions builds the image on a runner, ships it, and applies the stack)
 
@@ -373,7 +382,7 @@ drafting-assistant/
 ├── main.py                    # FastAPI entrypoint, CORS, health
 ├── config.py                  # Pydantic settings (all env vars)
 ├── db/
-│   └── connection.py          # asyncpg pool setup
+│   └── connection.py          # Legacy pool module; not used by app lifecycle
 ├── models/
 │   └── schemas.py             # Pydantic request/response models
 ├── routes/

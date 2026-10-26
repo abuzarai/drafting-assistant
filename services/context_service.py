@@ -1,7 +1,6 @@
-"""Context service with local DB and production proxy modes."""
+"""Case context and draft persistence through the Express application authority."""
 
 import logging
-import json
 from typing import Any
 
 import httpx
@@ -319,7 +318,7 @@ def build_balanced_case_context(
 async def _post_internal(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     if not settings.express_internal_url or not settings.internal_api_key:
         raise RuntimeError(
-            "Production mode requires EXPRESS_INTERNAL_URL and INTERNAL_API_KEY"
+            "Drafting requires EXPRESS_INTERNAL_URL and INTERNAL_API_KEY"
         )
 
     url = settings.express_internal_url.rstrip("/") + path
@@ -339,123 +338,30 @@ async def _post_internal(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-async def get_case_context(case_id: int, advocate_id: int, pool) -> dict[str, Any]:
-    if settings.env == "production":
-        return await _post_internal(
-            "/internal/draft/case-context",
-            {"case_id": case_id, "advocate_id": advocate_id},
-        )
-
-    if pool is None:
-        raise RuntimeError("Database pool is not initialized in local mode")
-
-    row = await pool.fetchrow(
-        """
-        SELECT
-            cc.*,
-            cu.name,
-            cu.email,
-            cu.name AS client_name,
-            cu.email AS client_email,
-            cp.phone AS client_phone,
-            cp.cnic AS client_cnic,
-            cp.city AS client_city,
-            cp.address AS client_address,
-            au.name AS advocate_name,
-            au.email AS advocate_email,
-            ap.phone AS advocate_phone,
-            ap.bar_council_id AS advocate_bar_council_id,
-            ap.city AS advocate_city,
-            ap.court AS advocate_court
-        FROM public.client_cases cc
-        JOIN public.users cu ON cc.user_id = cu.id
-        LEFT JOIN public.users au ON cc.assigned_advocate_id = au.id
-        LEFT JOIN public.client_profiles cp ON cp.user_id = cc.user_id
-        LEFT JOIN public.advocate_profiles ap ON ap.user_id = cc.assigned_advocate_id
-        WHERE cc.id = $1
-        """,
-        case_id,
+async def get_case_context(case_id: int, advocate_id: int) -> dict[str, Any]:
+    return await _post_internal(
+        "/internal/draft/case-context",
+        {"case_id": case_id, "advocate_id": advocate_id},
     )
 
-    if not row:
-        raise LookupError("Case not found")
 
-    data = dict(row)
-    if data.get("assigned_advocate_id") != advocate_id:
-        raise PermissionError("Advocate not authorized for this case")
-
-    return data
-
-
-async def get_intake_analysis(case_id: int, pool) -> dict[str, Any]:
-    if settings.env == "production":
-        return await _post_internal(
-            "/internal/draft/intake-analysis", {"case_id": case_id}
-        )
-
-    if pool is None:
-        raise RuntimeError("Database pool is not initialized in local mode")
-
-    row = await pool.fetchrow(
-        """
-        SELECT analysis, transcript
-        FROM public.case_intake_sessions
-        WHERE case_id = $1 AND LOWER(status) = 'completed'
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        case_id,
+async def get_intake_analysis(case_id: int, advocate_id: int) -> dict[str, Any]:
+    return await _post_internal(
+        "/internal/draft/intake-analysis",
+        {"case_id": case_id, "advocate_id": advocate_id},
     )
-
-    if not row:
-        return {"analysis": None, "transcript": None}
-
-    return {
-        "analysis": row.get("analysis"),
-        "transcript": row.get("transcript"),
-    }
 
 
 async def get_case_documents(
-    case_id: int, user_id: int, pool, advocate_id: int | None = None
+    case_id: int, advocate_id: int
 ) -> dict[str, list[dict[str, Any]]]:
-    if settings.env == "production":
-        if advocate_id is None:
-            raise RuntimeError("advocate_id is required for production document access")
-        data = await _post_internal(
-            "/internal/draft/documents",
-            {"case_id": case_id, "user_id": user_id, "advocate_id": advocate_id},
-        )
-        return {
-            "case_documents": data.get("case_documents", []),
-            "client_documents": data.get("client_documents", []),
-        }
-
-    if pool is None:
-        raise RuntimeError("Database pool is not initialized in local mode")
-
-    case_rows = await pool.fetch(
-        """
-        SELECT id, doc_type, file_url, status, extracted_text, extraction_status, created_at, updated_at,
-               'case'::text AS source
-        FROM public.case_documents
-        WHERE case_id = $1
-        """,
-        case_id,
+    data = await _post_internal(
+        "/internal/draft/documents",
+        {"case_id": case_id, "advocate_id": advocate_id},
     )
-    client_rows = await pool.fetch(
-        """
-        SELECT id, doc_type, file_url, status, extracted_text, extraction_status, created_at, updated_at,
-               'client'::text AS source
-        FROM public.client_documents
-        WHERE user_id = $1
-        """,
-        user_id,
-    )
-
     return {
-        "case_documents": [dict(row) for row in case_rows],
-        "client_documents": [dict(row) for row in client_rows],
+        "case_documents": data.get("case_documents", []),
+        "client_documents": data.get("client_documents", []),
     }
 
 
@@ -465,41 +371,15 @@ async def save_draft_session(
     generation_id: str,
     draft_json: dict[str, Any],
     advocate_id: int,
-    pool,
 ) -> bool:
-    if settings.env == "production":
-        data = await _post_internal(
-            "/internal/draft/save",
-            {
-                "case_id": case_id,
-                "document_type": document_type,
-                "generation_id": generation_id,
-                "draft_json": draft_json,
-                "advocate_id": advocate_id,
-            },
-        )
-        return bool(data.get("saved", True))
-
-    if pool is None:
-        raise RuntimeError("Database pool is not initialized in local mode")
-
-    result = await pool.execute(
-        """
-        INSERT INTO public.draft_sessions
-            (case_id, document_type, generation_id, draft_json, advocate_id)
-        VALUES ($1, $2, $3, $4::jsonb, $5)
-        ON CONFLICT (generation_id) DO UPDATE
-            SET case_id = EXCLUDED.case_id,
-                document_type = EXCLUDED.document_type,
-                draft_json = EXCLUDED.draft_json,
-                advocate_id = EXCLUDED.advocate_id,
-                updated_at = now()
-        """,
-        case_id,
-        document_type,
-        generation_id,
-        json.dumps(draft_json),
-        advocate_id,
+    data = await _post_internal(
+        "/internal/draft/save",
+        {
+            "case_id": case_id,
+            "document_type": document_type,
+            "generation_id": generation_id,
+            "draft_json": draft_json,
+            "advocate_id": advocate_id,
+        },
     )
-    logger.info("Draft saved (%s)", result)
-    return True
+    return data.get("saved") is True

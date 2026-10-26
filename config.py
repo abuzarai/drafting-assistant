@@ -6,7 +6,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env early so GCP clients can find credentials at import time
-load_dotenv()
+if os.getenv("PYTHON_DOTENV_DISABLED") != "1":
+    load_dotenv()
 
 _creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 if _creds_path and not os.path.isabs(_creds_path):
@@ -30,14 +31,14 @@ class Settings(BaseSettings):
     gcp_project_id: str = Field(default="")
     google_vertex_location: str = Field(default="us-central1")
 
-    # Local DB (used when env=local)
+    # Legacy DB configuration; drafting now uses Express in every environment.
     db_host: str = "localhost"
     db_port: int = 5432
     db_database: str = "insafdaar_db"
     db_user: str = "postgres"
     db_password: str = ""
 
-    # Production (used when env=production)
+    # Required application authority in every environment.
     express_internal_url: str = ""
     internal_api_key: str = ""
 
@@ -55,4 +56,6 @@ class Settings(BaseSettings):
     )
 
 
-settings = Settings()
+settings = Settings(
+    _env_file=None if os.getenv("PYTHON_DOTENV_DISABLED") == "1" else ".env"
+)

@@ -24,13 +24,7 @@ def _mock_prefilled_fields():
     }
 
 
-async def _noop_async(*_args, **_kwargs):
-    return None
-
-
 def _build_client():
-    draft_main.init_pool = _noop_async
-    draft_main.close_pool = _noop_async
     return TestClient(draft_main.app)
 
 
@@ -45,7 +39,6 @@ def test_health_returns_service_status():
 
 def test_draft_init_success(monkeypatch):
     client = _build_client()
-    monkeypatch.setattr("routes.draft.get_pool", lambda: object())
 
     async def _get_case_context(*_args, **_kwargs):
         return {
@@ -98,7 +91,6 @@ def test_draft_init_success(monkeypatch):
 
 def test_draft_generate_success(monkeypatch):
     client = _build_client()
-    monkeypatch.setattr("routes.draft.get_pool", lambda: object())
 
     async def _get_case_context(*_args, **_kwargs):
         return {"user_id": 501, "name": "Ali Raza"}
@@ -179,7 +171,10 @@ def test_draft_generate_success(monkeypatch):
 
     body = None
     for _ in range(50):
-        status_resp = client.get(f"/draft/generate/{job_id}", headers=AUTH)
+        status_resp = client.get(
+            f"/draft/generate/{job_id}",
+            params={"case_id": 101, "advocate_id": 77}, headers=AUTH,
+        )
         assert status_resp.status_code == 200
         body = status_resp.json()
         if body["status"] in ("succeeded", "failed"):
@@ -195,7 +190,10 @@ def test_draft_generate_success(monkeypatch):
 
 def test_draft_generate_status_404():
     client = _build_client()
-    assert client.get("/draft/generate/does-not-exist", headers=AUTH).status_code == 404
+    assert client.get(
+        "/draft/generate/does-not-exist",
+        params={"case_id": 101, "advocate_id": 77}, headers=AUTH,
+    ).status_code == 404
 
 
 def test_draft_export_rejects_non_docx():
